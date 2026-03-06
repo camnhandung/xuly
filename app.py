@@ -3,127 +3,109 @@ import pandas as pd
 from docx import Document
 from io import BytesIO
 
-def create_word_output(df_data, template_file):
-    # Đọc mẫu để lấy định dạng
-    doc_template = Document(template_file)
-    if not doc_template.tables:
+def create_final_word(df, template_path):
+    # Đọc mẫu để lấy style bảng
+    doc_temp = Document(template_path)
+    if not doc_temp.tables:
         st.error("File Word mẫu không có bảng!")
         return None
     
-    template_table = doc_template.tables[0]
-    # Xác định số cột thực tế của bảng mẫu
+    template_table = doc_temp.tables[0]
     num_cols = len(template_table.columns)
     
     new_doc = Document()
 
-    # Nhóm theo Tỉnh và Xã (Dữ liệu đã được gộp và làm sạch ở bước ngoài)
-    provinces = df_data['Tỉnh'].unique()
+    # Nhóm dữ liệu theo Tỉnh (Cột 13) và Xã (Cột 12) theo vị trí index
+    # (Index 12 là cột M, Index 13 là cột N trong file Excel của bạn)
+    provinces = df.iloc[:, 13].unique()
 
     for prov in provinces:
-        if pd.isna(prov) or str(prov).strip() == "": continue
+        if pd.isna(prov) or str(prov).strip() == "" or str(prov).lower() == "tỉnh": continue
         new_doc.add_heading(f"I. Tỉnh {prov}", level=1)
         
-        prov_df = df_data[df_data['Tỉnh'] == prov]
-        communes = prov_df['Xã'].unique()
+        prov_df = df[df.iloc[:, 13] == prov]
+        communes = prov_df.iloc[:, 12].unique()
 
         for comm in communes:
-            if pd.isna(comm) or str(comm).strip() == "": continue
+            if pd.isna(comm) or str(comm).strip() == "" or str(comm).lower() == "xã": continue
             new_doc.add_heading(f"1. Xã {comm}", level=2)
             
-            # Tạo bảng mới copy từ template
-            new_table = new_doc.add_table(rows=1, cols=num_cols)
-            new_table.style = template_table.style
-            
-            # Copy header từ template
+            # Tạo bảng mới và copy header
+            table = new_doc.add_table(rows=1, cols=num_cols)
+            table.style = template_table.style
             for i in range(num_cols):
-                new_table.rows[0].cells[i].text = template_table.rows[0].cells[i].text
+                table.rows[0].cells[i].text = template_table.rows[0].cells[i].text
 
-            # Lấy dữ liệu quân nhân trong xã
-            comm_df = prov_df[prov_df['Xã'] == comm]
+            # Lọc dữ liệu theo xã
+            comm_df = prov_df[prov_df.iloc[:, 12] == comm]
+            
             for _, row in comm_df.iterrows():
-                row_cells = new_table.add_row().cells
+                row_cells = table.add_row().cells
                 
-                # Hàm điền dữ liệu an toàn để tránh IndexError
-                def safe_fill(idx, value):
+                def fill(idx, val):
                     if idx < num_cols:
-                        row_cells[idx].text = str(value) if pd.notna(value) else ""
+                        # Xử lý xóa .0 cho số và chuyển về string
+                        v = str(val).replace('.0', '') if pd.notna(val) else ""
+                        row_cells[idx].text = v if v != 'nan' else ""
 
-                # Điền dữ liệu theo đúng vị trí bảng mẫu của bạn
-                safe_fill(0, row.get('TT', ''))
-                safe_fill(1, row.get('Họ Và tên', ''))
+                # Điền dựa theo thứ tự cột trong file Excel của bạn
+                fill(0, row.iloc[0])   # TT
+                fill(1, row.iloc[1])   # Họ tên
                 
-                # Ngày sinh (Ghép từ 3 cột)
-                d = str(row.get('Ngày', '')).replace('.0', '')
-                m = str(row.get('Tháng', '')).replace('.0', '')
-                y = str(row.get('năm', '')).replace('.0', '')
-                safe_fill(2, f"{d}/{m}/{y}" if d != 'nan' and d != '' else "")
+                # Cột 2: Ngày sinh (Ghép cột 9, 10, 11)
+                d = str(row.iloc[9]).replace('.0', '')
+                m = str(row.iloc[10]).replace('.0', '')
+                y = str(row.iloc[11]).replace('.0', '')
+                fill(2, f"{d}/{m}/{y}" if d != 'nan' and d != '' else "")
+
+                fill(3, row.iloc[3])   # Cấp bậc (CB)
+                fill(4, row.iloc[4])   # Chức vụ (CV)
+                fill(5, row.iloc[2])   # Đơn vị (ĐV)
+                fill(6, row.iloc[5])   # Nhập ngũ (N.N)
+                fill(8, row.iloc[7])   # Văn hóa
+                fill(10, row.iloc[6])  # Dân tộc
                 
-                safe_fill(3, row.get('CB', ''))
-                safe_fill(4, row.get('CV', ''))
-                safe_fill(5, row.get('ĐV', ''))
-                safe_fill(6, row.get('N.N', ''))
-                safe_fill(8, row.get('Văn Hóa', ''))
-                safe_fill(10, row.get('Dân tộc', ''))
+                # Cột 14: Quê quán (Tự động gộp Xã và Tỉnh)
+                xa = str(row.iloc[12])
+                tinh = str(row.iloc[13])
+                fill(14, f"{xa}, {tinh}")
 
-                # --- QUÊ QUÁN: GỘP XÃ VÀ TỈNH ---
-                xa_tinh = f"{row.get('Xã', '')}, {row.get('Tỉnh', '')}"
-                safe_fill(14, xa_tinh) # Cột Quê quán thường là cột 15 (index 14)
-                
-                # --- HỌ TÊN BỐ MẸ ---
-                bo_me = f"{row.get('Bố', '')}, {row.get('Mẹ', '')}"
-                safe_fill(16, bo_me if len(bo_me) > 2 else "")
+                # Cột 16: Bố mẹ (Ghép cột 16, 17)
+                bo = str(row.iloc[16])
+                me = str(row.iloc[17])
+                fill(16, f"{bo}, {me}" if bo != 'nan' or me != 'nan' else "")
 
-                safe_fill(18, str(row.get('SDT gia đình', '')).replace('.0', ''))
-                safe_fill(19, row.get('Số CCCD', ''))
+                fill(18, row.iloc[18]) # SDT
+                fill(19, row.iloc[8])  # CCCD
 
-    bio = BytesIO()
-    new_doc.save(bio)
-    bio.seek(0)
-    return bio
+    output = BytesIO()
+    new_doc.save(output)
+    output.seek(0)
+    return output
 
-# --- GIAO DIỆN STREAMLIT ---
-st.set_page_config(page_title="Xử lý Trích Ngang", layout="wide")
-st.title("Phần mềm tạo Trích Ngang tự động")
+# --- Streamlit UI ---
+st.set_page_config(page_title="Hệ thống Trích Ngang", layout="wide")
+st.title("Tạo Trích Ngang Quân Nhân Tự Động")
 
 col1, col2 = st.columns(2)
 with col1:
-    ex_file = st.file_uploader("Tải Excel (.xlsx)", type=["xlsx"])
+    ex_file = st.file_uploader("Bước 1: Tải Excel (.xlsx)", type=["xlsx"])
 with col2:
-    wd_file = st.file_uploader("Tải Word mẫu (.docx)", type=["docx"])
+    wd_file = st.file_uploader("Bước 2: Tải Word mẫu (.docx)", type=["docx"])
 
 if ex_file and wd_file:
-    # Bước 1: Đọc Excel và xử lý tiêu đề gộp
-    df_raw = pd.read_excel(ex_file, header=None)
+    # Đọc Excel: Lấy dữ liệu từ dòng 3 trở đi để bỏ qua merged headers
+    # Dữ liệu thật bắt đầu từ row 2 (0-indexed)
+    df = pd.read_excel(ex_file, header=None)
     
-    # Tìm dòng chứa "Họ Và tên"
-    header_idx = 0
-    for i, r in df_raw.iterrows():
-        if "Họ Và tên" in r.values:
-            header_idx = i
-            break
-            
-    df = pd.read_excel(ex_file, header=header_idx)
-    
-    # Làm sạch tên cột (xóa khoảng trắng thừa)
-    df.columns = [str(c).strip() for c in df.columns]
-    
-    # Bỏ các dòng rác (không có tên)
-    df = df.dropna(subset=['Họ Và tên'])
-    # Chuyển các cột số (Ngày, Tháng, Năm) sang dạng chuỗi để gộp không bị lỗi .0
-    for col in ['Ngày', 'Tháng', 'năm', 'TT']:
-        if col in df.columns:
-            df[col] = df[col].astype(str).str.replace('.0', '', regex=False)
+    # Lọc bỏ các dòng tiêu đề rác, chỉ giữ dòng có số TT là số
+    df_clean = df[pd.to_numeric(df.iloc[:, 0], errors='coerce').notnull()]
 
-    st.success("Dữ liệu nạp thành công!")
-    st.dataframe(df.head())
+    st.success(f"Đã tìm thấy {len(df_clean)} quân nhân.")
+    st.dataframe(df_clean.head())
 
-    if st.button("🚀 Bắt đầu tạo file Word"):
-        with st.spinner("Đang xử lý..."):
-            result_docx = create_word_output(df, wd_file)
-            if result_docx:
-                st.download_button(
-                    label="📥 Tải file Word kết quả",
-                    data=result_docx,
-                    file_name="Ket_qua_Trich_Ngang.docx",
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                )
+    if st.button("🚀 Xuất file Word"):
+        with st.spinner("Đang xử lý dữ liệu..."):
+            res = create_final_word(df_clean, wd_file)
+            if res:
+                st.download_button("📥 Tải xuống kết quả", res, "Trich_Ngang_Chuan.docx")
