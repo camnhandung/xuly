@@ -1,111 +1,100 @@
 import streamlit as st
 import pandas as pd
-from docx import Document
 from io import BytesIO
 
-def create_final_word(df, template_path):
-    # Đọc mẫu để lấy style bảng
-    doc_temp = Document(template_path)
-    if not doc_temp.tables:
-        st.error("File Word mẫu không có bảng!")
-        return None
-    
-    template_table = doc_temp.tables[0]
-    num_cols = len(template_table.columns)
-    
-    new_doc = Document()
+# Cấu hình trang
+st.set_page_config(page_title="Gộp Dữ Liệu Gia Đình", layout="centered")
 
-    # Nhóm dữ liệu theo Tỉnh (Cột 13) và Xã (Cột 12) theo vị trí index
-    # (Index 12 là cột M, Index 13 là cột N trong file Excel của bạn)
-    provinces = df.iloc[:, 13].unique()
+st.title("🛠 Công cụ gộp thông tin Bố Mẹ & SĐT")
+st.write("Tải lên file Excel có định dạng như ảnh 2 để chuyển đổi sang định dạng ảnh 1.")
 
-    for prov in provinces:
-        if pd.isna(prov) or str(prov).strip() == "" or str(prov).lower() == "tỉnh": continue
-        new_doc.add_heading(f"I. Tỉnh {prov}", level=1)
+# 1. Tải file lên
+uploaded_file = st.file_uploader("Chọn file Excel (.xlsx hoặc .xls)", type=["xlsx", "xls"])
+
+if uploaded_file:
+    try:
+        # Đọc dữ liệu
+        df = pd.read_excel(uploaded_file)
         
-        prov_df = df[df.iloc[:, 13] == prov]
-        communes = prov_df.iloc[:, 12].unique()
+        st.subheader("Dữ liệu gốc (Xem trước)")
+        st.dataframe(df.head())
 
-        for comm in communes:
-            if pd.isna(comm) or str(comm).strip() == "" or str(comm).lower() == "xã": continue
-            new_doc.add_heading(f"1. Xã {comm}", level=2)
-            
-            # Tạo bảng mới và copy header
-            table = new_doc.add_table(rows=1, cols=num_cols)
-            table.style = template_table.style
-            for i in range(num_cols):
-                table.rows[0].cells[i].text = template_table.rows[0].cells[i].text
+        # Kiểm tra sự tồn tại của các cột (tùy chỉnh tên cột nếu file của bạn khác)
+        # Ở đây tôi mặc định lấy theo ảnh: 'Bố', 'Mẹ', 'SDT gia đình'
+        columns = df.columns.tolist()
+        
+        st.info(f"Các cột tìm thấy: {', '.join(columns)}")
 
-            # Lọc dữ liệu theo xã
-            comm_df = prov_df[prov_df.iloc[:, 12] == comm]
-            
-            for _, row in comm_df.iterrows():
-                row_cells = table.add_row().cells
+        # Cho phép người dùng chọn cột nếu tên không khớp hoàn toàn
+        col_bo = st.selectbox("Chọn cột Họ tên Bố:", columns, index=0 if 'Bố' in columns else 0)
+        col_me = st.selectbox("Chọn cột Họ tên Mẹ:", columns, index=1 if 'Mẹ' in columns else 0)
+        col_sdt = st.selectbox("Chọn cột Số điện thoại:", columns, index=2 if 'SDT' in columns[2] or 'SĐT' in columns[2] else 0)
+
+        if st.button("Bắt đầu xử lý và gộp dữ liệu"):
+            # 2. Xử lý gộp dữ liệu
+            # Hàm gộp: Tên Bố \n Tên Mẹ \n Số điện thoại
+            def combine_info(row):
+                bo = str(row[col_bo]).strip() if pd.notna(row[col_bo]) else ""
+                me = str(row[col_me]).strip() if pd.notna(row[col_me]) else ""
+                sdt = str(row[col_sdt]).strip() if pd.notna(row[col_sdt]) else ""
                 
-                def fill(idx, val):
-                    if idx < num_cols:
-                        # Xử lý xóa .0 cho số và chuyển về string
-                        v = str(val).replace('.0', '') if pd.notna(val) else ""
-                        row_cells[idx].text = v if v != 'nan' else ""
+                # Định dạng số điện thoại nếu bị biến thành số thực (ví dụ 3.75e+08)
+                if sdt.endswith('.0'): sdt = sdt[:-2]
+                if len(sdt) > 0 and not sdt.startswith('0'): sdt = '0' + sdt
 
-                # Điền dựa theo thứ tự cột trong file Excel của bạn
-                fill(0, row.iloc[0])   # TT
-                fill(1, row.iloc[1])   # Họ tên
+                return f"{bo}\n{me}\n{sdt}"
+
+            # Tạo DataFrame mới chỉ có 1 cột kết quả
+            output_df = pd.DataFrame()
+            output_df['Họ tên bố, mẹ\nHọ tên vợ, con\nSỐ ĐIỆN THOẠI\nGIA ĐÌNH'] = df.apply(combine_info, axis=1)
+
+            st.success("Đã xử lý xong!")
+            st.subheader("Dữ liệu sau khi gộp")
+            st.dataframe(output_df)
+
+            # 3. Xuất file Excel
+            output = BytesIO()
+            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                output_df.to_excel(writer, index=False, sheet_name='Sheet1')
                 
-                # Cột 2: Ngày sinh (Ghép cột 9, 10, 11)
-                d = str(row.iloc[9]).replace('.0', '')
-                m = str(row.iloc[10]).replace('.0', '')
-                y = str(row.iloc[11]).replace('.0', '')
-                fill(2, f"{d}/{m}/{y}" if d != 'nan' and d != '' else "")
-
-                fill(3, row.iloc[3])   # Cấp bậc (CB)
-                fill(4, row.iloc[4])   # Chức vụ (CV)
-                fill(5, row.iloc[2])   # Đơn vị (ĐV)
-                fill(6, row.iloc[5])   # Nhập ngũ (N.N)
-                fill(8, row.iloc[7])   # Văn hóa
-                fill(10, row.iloc[6])  # Dân tộc
+                # Định dạng tự động xuống dòng trong Excel (Wrap Text)
+                workbook  = writer.book
+                worksheet = writer.sheets['Sheet1']
+                wrap_format = workbook.add_format({'text_wrap': True, 'align': 'center', 'valign': 'vcenter'})
                 
-                # Cột 14: Quê quán (Tự động gộp Xã và Tỉnh)
-                xa = str(row.iloc[12])
-                tinh = str(row.iloc[13])
-                fill(14, f"{xa}, {tinh}")
+                # Áp dụng định dạng cho cột A và đặt độ rộng
+                worksheet.set_column('A:A', 35, wrap_format)
 
-                # Cột 16: Bố mẹ (Ghép cột 16, 17)
-                bo = str(row.iloc[16])
-                me = str(row.iloc[17])
-                fill(16, f"{bo}, {me}" if bo != 'nan' or me != 'nan' else "")
+            processed_data = output.getvalue()
 
-                fill(18, row.iloc[18]) # SDT
-                fill(19, row.iloc[8])  # CCCD
+            st.download_button(
+                label="📥 Tải xuống file Excel đã gộp",
+                data=processed_data,
+                file_name="Gia_Dinh_Da_Gop.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 
-    output = BytesIO()
-    new_doc.save(output)
-    output.seek(0)
-    return output
+    except Exception as e:
+        st.error(f"Đã có lỗi xảy ra: {e}")
 
-# --- Streamlit UI ---
-st.set_page_config(page_title="Hệ thống Trích Ngang", layout="wide")
-st.title("Tạo Trích Ngang Quân Nhân Tự Động")
+---
+### Hướng dẫn sử dụng:
 
-col1, col2 = st.columns(2)
-with col1:
-    ex_file = st.file_uploader("Bước 1: Tải Excel (.xlsx)", type=["xlsx"])
-with col2:
-    wd_file = st.file_uploader("Bước 2: Tải Word mẫu (.docx)", type=["docx"])
+1.  **Cài đặt thư viện cần thiết:**
+    Chạy lệnh sau trong terminal của bạn:
+    ```bash
+    pip install streamlit pandas openpyxl xlsxwriter
+    ```
+2.  **Chạy ứng dụng:**
+    Lưu đoạn mã trên vào file `app.py` và chạy:
+    ```bash
+    streamlit run app.py
+    ```
+3.  **Cách thức hoạt động:**
+    * Ứng dụng sẽ đọc file Excel của bạn (Ảnh 2).
+    * Nó sẽ tạo ra một cột mới, gộp tên Bố, tên Mẹ và SĐT lại, ngăn cách bằng dấu xuống dòng (`\n`).
+    * Khi tải xuống, file Excel sẽ được tự động bật tính năng **Wrap Text** (Tự động xuống dòng) để hiển thị giống hệt như Ảnh 1.
 
-if ex_file and wd_file:
-    # Đọc Excel: Lấy dữ liệu từ dòng 3 trở đi để bỏ qua merged headers
-    # Dữ liệu thật bắt đầu từ row 2 (0-indexed)
-    df = pd.read_excel(ex_file, header=None)
-    
-    # Lọc bỏ các dòng tiêu đề rác, chỉ giữ dòng có số TT là số
-    df_clean = df[pd.to_numeric(df.iloc[:, 0], errors='coerce').notnull()]
+**Lưu ý nhỏ:** Nếu số điện thoại trong file Excel của bạn bị mất số `0` ở đầu (do Excel hiểu là định dạng số), đoạn mã trên đã có hàm tự động bù lại số `0` cho bạn.
 
-    st.success(f"Đã tìm thấy {len(df_clean)} quân nhân.")
-    st.dataframe(df_clean.head())
-
-    if st.button("🚀 Xuất file Word"):
-        with st.spinner("Đang xử lý dữ liệu..."):
-            res = create_final_word(df_clean, wd_file)
-            if res:
-                st.download_button("📥 Tải xuống kết quả", res, "Trich_Ngang_Chuan.docx")
+Bạn có muốn tôi chỉnh sửa thêm về giao diện hay thêm cột nào khác vào phần gộp không?
