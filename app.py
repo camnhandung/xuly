@@ -123,4 +123,34 @@ def process_files(excel_file, word_template):
                 cells[7].text = "BN"
                 cells[8].text = van_hoa
                 cells[10].text = dan_toc
-                cells[14].text = f"{xa_name}-{tinh
+                cells[14].text = f"{xa_name}-{tinh_name}"
+                cells[16].text = f"{bo}\n{me}" # Xuống dòng tên bố mẹ
+                cells[18].text = sdt
+                cells[19].text = cccd
+                
+                stt_trong_tinh += 1
+
+                # Định dạng lại toàn bộ chữ trong dòng về Times New Roman 10pt
+                for cell in cells:
+                    for p in cell.paragraphs:
+                        for run in p.runs:
+                            run.font.name = 'Times New Roman'
+                            run.font.size = Pt(10)
+
+    output = io.BytesIO()
+    doc.save(output)
+    output.seek(0)
+    return output
+
+# --- Giao diện Streamlit ---
+st.title("Tạo Trích Ngang Chuẩn Mẫu")
+w_file = st.file_uploader("Tải Word mẫu", type=['docx'])
+e_file = st.file_uploader("Tải Excel dữ liệu", type=['xlsx', 'csv'])
+
+if w_file and e_file:
+    if st.button("🚀 Xuất file Word"):
+        try:
+            res = process_files(e_file, w_file)
+            st.download_button("📥 Tải kết quả", res, "Ket_qua_trich_ngang.docx")
+        except Exception as e:
+            st.error(f"Lỗi: {e}")
