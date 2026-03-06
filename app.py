@@ -1,171 +1,175 @@
 import streamlit as st
 import pandas as pd
-from io import BytesIO
 from docx import Document
-from docx.shared import Pt
-from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
-from docx.oxml.ns import qn
-import datetime
+from docx.shared import Pt, Cm
+from docx.enum.section import WD_ORIENT
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+import io
 
-st.set_page_config(page_title="Excel → Word (mẫu)", layout="wide")
+def convert_to_roman(num):
+    val = [1000, 900, 500, 400, 100, 90, 50, 40, 10, 9, 5, 4, 1]
+    syb = ["M", "CM", "D", "CD", "C", "XC", "L", "XL", "X", "IX", "V", "IV", "I"]
+    roman_num = ''
+    i = 0
+    while num > 0:
+        for _ in range(num // val[i]):
+            roman_num += syb[i]
+            num -= val[i]
+        i += 1
+    return roman_num
 
-st.title("Chuyển dữ liệu Excel thành file Word theo mẫu")
-
-uploaded_file = st.file_uploader("Tải lên file Excel (.xlsx) chứa danh sách", type=["xlsx","xls"], accept_multiple_files=False)
-
-def detect_columns(df):
-    # mapping candidates: key = normalized name, value = actual column in df
-    cols = {c.lower().strip(): c for c in df.columns}
-    def find(keys):
-        for k in keys:
-            if k.lower() in cols:
-                return cols[k.lower()]
-        # try partial match
-        for c in df.columns:
-            low = c.lower()
-            for k in keys:
-                if k.lower() in low:
-                    return c
-        return None
-    mapping = {
-        "ho_ten": find(["họ và tên","họ và tên","họ tên","ho va ten","ho ten","họ và tên ngà","họ và tên ngày"]),
-        "ngay_sinh": find(["ngày tháng năm sinh","ngay thang nam sinh","ngày sinh","ngay sinh"]),
-        "don_vi": find(["đv","đơn vị","don vi","đơn vi"]),
-        "cb_cv": find(["cb","cb cv","cb cv","cb cv","cb cv"]),
-        "nhap_ngu": find(["n.n","n.n.","nhập ngũ","nhap ngũ","nhập ngu"]),
-        "dan_toc": find(["dân tộc","dân toc","dan toc"]),
-        "van_hoa": find(["văn hóa","văn hoa","van hoa"]),
-        "so_cccd": find(["số cccd","số cmt","số cmnd","so cccd","cccd"]),
-        "que_quan": find(["quê quán","quê quán trú quán","quê quán trú","quê quán trú quán","quê quán/trú quán","quê quán/trú quán"]),
-        "xa": find(["xã","xa"]),
-        "tinh": find(["tỉnh","tinh"]),
-        "bo": find(["bố","bo"]),
-        "me": find(["mẹ","me"]),
-        "sdt_gia_dinh": find(["sdt","số điện thoại gia đình","sd t gia đình","sd t gia dinh","sdt gia đình","sdt gia dinh"])
-    }
-    return mapping
-
-def format_cell(val):
-    if pd.isna(val):
-        return ""
-    if isinstance(val, float) and val.is_integer():
-        return str(int(val))
-    return str(val)
-
-def create_word_from_df(df):
-    mapping = detect_columns(df)
-    # ensure columns exist; if not, create empty
-    for v in mapping.values():
-        if v is None:
-            # nothing to do; we'll use empty values
-            pass
-
-    # Normalize columns into a working DataFrame
-    work = pd.DataFrame()
-    work["Họ và tên"] = df[mapping["ho_ten"]] if mapping["ho_ten"] in df.columns else ""
-    work["Ngày sinh"] = df[mapping["ngay_sinh"]] if mapping["ngay_sinh"] in df.columns else ""
-    work["Đơn vị"] = df[mapping["don_vi"]] if mapping["don_vi"] in df.columns else ""
-    work["Cb CV"] = df[mapping["cb_cv"]] if mapping["cb_cv"] in df.columns else ""
-    work["Nhập ngũ"] = df[mapping["nhap_ngu"]] if mapping["nhap_ngu"] in df.columns else ""
-    work["Dân tộc"] = df[mapping["dan_toc"]] if mapping["dan_toc"] in df.columns else ""
-    work["Văn hóa"] = df[mapping["van_hoa"]] if mapping["van_hoa"] in df.columns else ""
-    work["Số CCCD"] = df[mapping["so_cccd"]] if mapping["so_cccd"] in df.columns else ""
-    work["Quê quán"] = df[mapping["que_quan"]] if mapping["que_quan"] in df.columns else ""
-    work["Xã"] = df[mapping["xa"]] if mapping["xa"] in df.columns else ""
-    work["Tỉnh"] = df[mapping["tinh"]] if mapping["tinh"] in df.columns else ""
-    work["Bố"] = df[mapping["bo"]] if mapping["bo"] in df.columns else ""
-    work["Mẹ"] = df[mapping["me"]] if mapping["me"] in df.columns else ""
-    work["SDT gia đình"] = df[mapping["sdt_gia_dinh"]] if mapping["sdt_gia_dinh"] in df.columns else ""
-
-    # Fill NaN with empty string
-    work = work.fillna("")
-
-    # Group by Tỉnh then Xã
-    grouped = work.groupby(["Tỉnh","Xã"], sort=False)
-
+def generate_word_doc(df):
+    # Tạo document và thiết lập khổ giấy ngang (Landscape) để vừa nhiều cột
     doc = Document()
-    # set default font (Times New Roman) and size
-    style = doc.styles['Normal']
-    style.font.name = 'Times New Roman'
-    style._element.rPr.rFonts.set(qn('w:eastAsia'), 'Times New Roman')
-    style.font.size = Pt(12)
+    section = doc.sections[-1]
+    new_width, new_height = section.page_height, section.page_width
+    section.orientation = WD_ORIENT.LANDSCAPE
+    section.page_width = new_width
+    section.page_height = new_height
+    
+    # Tiêu đề
+    title = doc.add_paragraph("TỔNG HỢP TRÍCH NGANG")
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    for run in title.runs:
+        run.bold = True
+        run.font.size = Pt(14)
+    
+    # Các cột trong bảng Word mẫu
+    headers = [
+        "TT", "Họ và tên", "Ngày tháng năm sinh", "Cb", "CV", "Đơn vị", 
+        "Nhập ngũ", "Thành phần", "Văn hóa", "Sức khỏe", "DT", "TG", 
+        "Ngày vào Đoàn", "Ngày vào Đảng", "Quê quán", "Trú Quán", 
+        "Họ tên bố, mẹ", "Họ tên vợ, con", "SỐ ĐIỆN THOẠI", "Số cccd", "Ghi chú"
+    ]
+    
+    table = doc.add_table(rows=1, cols=len(headers))
+    table.style = 'Table Grid'
+    
+    # Điền header
+    hdr_cells = table.rows[0].cells
+    for i, header_text in enumerate(headers):
+        hdr_cells[i].text = header_text
+        hdr_cells[i].paragraphs[0].runs[0].bold = True
+        hdr_cells[i].paragraphs[0].runs[0].font.size = Pt(9)
 
-    # Header (you can customize)
-    doc_para = doc.add_paragraph()
-    run = doc_para.add_run("TỔNG HỢP TRÍCH NGANG")
-    run.bold = True
-    run.font.size = Pt(14)
-    doc_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+    # Loại bỏ dữ liệu trống và thay thế NaN
+    df = df.dropna(subset=[1]) # Drop nếu không có Tên
+    df = df.fillna("")
 
-    current_province = None
-    for (province, xa), group in grouped:
-        province = format_cell(province)
-        xa = format_cell(xa)
-        if province and province != current_province:
-            doc.add_paragraph()  # spacing
-            p = doc.add_paragraph(province)
-            p.runs[0].bold = True
-            current_province = province
-        if xa:
-            p2 = doc.add_paragraph(f"{xa}")
-            p2.runs[0].italic = True
+    # Nhóm dữ liệu theo Tỉnh và Xã
+    # Tỉnh ở cột index 13, Xã ở cột index 12
+    grouped_tinh = df.groupby(13)
+    
+    tinh_counter = 1
+    for tinh, group_tinh in grouped_tinh:
+        if str(tinh).strip() == "": continue
+        
+        # Thêm dòng Tỉnh
+        row_tinh = table.add_row().cells
+        row_tinh[0].merge(row_tinh[-1])
+        row_tinh[0].text = f"{convert_to_roman(tinh_counter)}. Tỉnh {tinh}"
+        row_tinh[0].paragraphs[0].runs[0].bold = True
+        tinh_counter += 1
+        
+        grouped_xa = group_tinh.groupby(12)
+        xa_counter = 1
+        for xa, group_xa in grouped_xa:
+            if str(xa).strip() == "": continue
+            
+            # Thêm dòng Xã
+            row_xa = table.add_row().cells
+            row_xa[0].merge(row_xa[-1])
+            row_xa[0].text = f"{xa_counter}. Xã {xa}"
+            row_xa[0].paragraphs[0].runs[0].bold = True
+            xa_counter += 1
+            
+            # Thêm chi tiết từng người
+            for index, row_data in group_xa.iterrows():
+                row_cells = table.add_row().cells
+                
+                # Trích xuất dữ liệu dựa theo index cột Excel
+                ho_ten = str(row_data[1])
+                dv = str(row_data[2])
+                cb = str(row_data[3]).replace("Binh nhì", "B2") # Có thể tùy chỉnh mapping
+                cv = str(row_data[4]).replace("Chiến sĩ", "CS")
+                nn = str(row_data[5])
+                dt = str(row_data[6])
+                vh = str(row_data[7])
+                cccd = str(row_data[8])
+                
+                # Xử lý ngày sinh
+                ngay, thang, nam = str(row_data[9]), str(row_data[10]), str(row_data[11])
+                ngay_sinh = f"{ngay.split('.')[0]}/{thang.split('.')[0]}/{nam.split('.')[0]}" if ngay else ""
+                
+                bo, me = str(row_data[16]), str(row_data[17])
+                bo_me = f"{bo}, {me}".strip(", ")
+                
+                sdt = str(row_data[18]).split('.')[0] # Bỏ số .0 nếu có ở cuối
+                que_quan = f"{xa}-{tinh}"
 
-        # create table with header row matching your Word sample
-        table = doc.add_table(rows=1, cols=15)
-        hdr_cells = table.rows[0].cells
-        headers = ["TT","Họ và tên Ngày tháng năm sinh","Cb CV","Đơn vị","Nhập ngũ","Thành phần","Văn hóa","Sức khỏe","DT TG","Ngày vào Đoàn","Ngày vào Đảng","Quê quán Trú Quán","Họ tên bố, mẹ Họ tên vợ, con SỐ ĐIỆN THOẠI GIA ĐÌNH","Số cccd","Ghi chú"]
-        for i, h in enumerate(headers):
-            hdr_cells[i].text = h
+                # Điền vào Word
+                row_cells[0].text = "" # Cột TT để trống hoặc tự đánh số
+                row_cells[1].text = ho_ten
+                row_cells[2].text = ngay_sinh
+                row_cells[3].text = cb
+                row_cells[4].text = cv
+                row_cells[5].text = dv
+                row_cells[6].text = nn
+                row_cells[7].text = "BN" # Thành phần (bạn có thể đổi theo ý)
+                row_cells[8].text = vh
+                row_cells[9].text = "" # Sức khỏe
+                row_cells[10].text = dt
+                row_cells[11].text = "" # TG
+                row_cells[12].text = "" # Ngày vào đoàn
+                row_cells[13].text = "" # Ngày vào Đảng
+                row_cells[14].text = que_quan
+                row_cells[15].text = "" # Trú quán
+                row_cells[16].text = bo_me
+                row_cells[17].text = "" # Vợ con
+                row_cells[18].text = sdt
+                row_cells[19].text = cccd
+                row_cells[20].text = "" # Ghi chú
+                
+                # Chỉnh font size nhỏ cho vừa bảng
+                for cell in row_cells:
+                    if cell.text:
+                        for paragraph in cell.paragraphs:
+                            for run in paragraph.runs:
+                                run.font.size = Pt(9)
 
-        # fill rows
-        for idx, row in group.reset_index(drop=True).iterrows():
-            r = table.add_row().cells
-            r[0].text = str(idx+1)
-            r[1].text = f"{format_cell(row['Họ và tên'])} {format_cell(row['Ngày sinh'])}"
-            r[2].text = format_cell(row["Cb CV"])
-            r[3].text = format_cell(row["Đơn vị"])
-            r[4].text = format_cell(row["Nhập ngũ"])
-            # placeholders for columns not in excel; leave empty or adapt
-            r[5].text = ""  # Thành phần
-            r[6].text = format_cell(row["Văn hóa"])
-            r[7].text = ""  # Sức khỏe
-            r[8].text = format_cell(row["Dân tộc"])
-            r[9].text = ""  # Ngày vào Đoàn
-            r[10].text = ""  # Ngày vào Đảng
-            r[11].text = format_cell(row["Quê quán"])
-            r[12].text = f"{format_cell(row['Bố'])} {format_cell(row['Mẹ'])} {format_cell(row['SDT gia đình'])}"
-            r[13].text = format_cell(row["Số CCCD"])
-            r[14].text = ""  # Ghi chú
+    # Lưu file ra byte stream để tải xuống
+    byte_io = io.BytesIO()
+    doc.save(byte_io)
+    byte_io.seek(0)
+    return byte_io
 
-    # Save to BytesIO and return
-    bio = BytesIO()
-    doc.save(bio)
-    bio.seek(0)
-    return bio
+# Giao diện Streamlit
+st.set_page_config(page_title="Tạo File Trích Ngang", layout="wide")
+st.title("Phần mềm tạo danh sách Trích Ngang tự động")
+st.write("Tải lên file Excel dữ liệu danh sách để tự động nhóm theo Tỉnh/Xã và xuất ra file Word.")
+
+uploaded_file = st.file_uploader("Chọn file Excel / CSV của bạn", type=['xlsx', 'csv'])
 
 if uploaded_file is not None:
     try:
-        # read all sheets and concat
-        xls = pd.ExcelFile(uploaded_file)
-        df_list = []
-        for sh in xls.sheet_names:
-            tmp = pd.read_excel(xls, sheet_name=sh, dtype=str)
-            if tmp.shape[1] > 0:
-                df_list.append(tmp)
-        if not df_list:
-            st.error("Không tìm thấy dữ liệu trong file Excel.")
+        # Bỏ qua 2 dòng đầu tiên (dòng tiêu đề chính và tiêu đề phụ) để lấy trực tiếp dữ liệu
+        if uploaded_file.name.endswith('.csv'):
+            df = pd.read_csv(uploaded_file, skiprows=2, header=None)
         else:
-            df = pd.concat(df_list, ignore_index=True)
-            st.success(f"Đã đọc Excel: {df.shape[0]} dòng, {df.shape[1]} cột.")
-            st.dataframe(df.head(10))
-
-            if st.button("Tạo file Word từ dữ liệu"):
-                with st.spinner("Đang tạo file Word..."):
-                    doc_bytes = create_word_from_df(df)
-                    now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                    filename = f"tong_hop_trich_ngang_{now}.docx"
-                    st.download_button("Tải file Word", data=doc_bytes, file_name=filename, mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+            df = pd.read_excel(uploaded_file, skiprows=2, header=None)
+            
+        st.success("Đã đọc file thành công! Preview dữ liệu thô:")
+        st.dataframe(df.head(3))
+        
+        if st.button("Tạo File Word"):
+            with st.spinner("Đang xử lý và tạo file..."):
+                word_file = generate_word_doc(df)
+                
+                st.download_button(
+                    label="📥 Tải xuống File Word (.docx)",
+                    data=word_file,
+                    file_name="Tong_hop_trich_ngang_ket_qua.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                )
     except Exception as e:
-        st.error(f"Lỗi khi đọc file Excel: {e}")
-else:
-    st.info("Vui lòng tải file Excel lên để bắt đầu.")
+        st.error(f"Có lỗi xảy ra khi xử lý file: {e}")
