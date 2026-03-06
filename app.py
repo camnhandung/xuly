@@ -1,76 +1,73 @@
 import streamlit as st
 import pandas as pd
 from docx import Document
-from docx.shared import Inches
-from docx.enum.section import WD_ORIENT
+from docx.shared import Pt
 from io import BytesIO
+import copy
 
-def create_word_from_excel(df):
-    doc = Document()
+def create_word_from_template(df_data, template_file):
+    # Đọc file template
+    doc_template = Document(template_file)
     
-    # Chuyển khổ giấy sang ngang (Landscape) để bảng không bị tràn
-    section = doc.sections[0]
-    section.orientation = WD_ORIENT.LANDSCAPE
-    new_width, new_height = section.page_height, section.page_width
-    section.page_width = new_width
-    section.page_height = new_height
+    # Tạo một file Word mới để chứa kết quả
+    new_doc = Document()
+    
+    # Lấy bảng mẫu đầu tiên trong file template để dùng làm khuôn
+    # (Giả sử bảng mẫu của bạn là bảng đầu tiên trong file word)
+    template_table = doc_template.tables[0]
+    
+    # Lọc bỏ dòng trống trong Excel
+    df_data = df_data.dropna(subset=['Họ Và tên'])
 
-    # Định nghĩa tiêu đề cột cho file Word [cite: 1]
-    headers = [
-        "TT", "Họ và tên", "Ngày sinh", "Cb", "CV", "Đơn vị", 
-        "Nhập ngũ", "Thành phần", "Văn hóa", "Sức khỏe", "DT", "TG", 
-        "Đoàn", "Đảng", "Quê quán", "Trú Quán", 
-        "Họ tên bố, mẹ", "Họ tên vợ, con", "SĐT Gia đình", "Số CCCD", "Ghi chú"
-    ]
-
-    # Lọc bỏ các dòng không có tên để tránh tạo bảng trống [cite: 5]
-    df = df.dropna(subset=['Họ Và tên'])
-
-    # Nhóm theo Tỉnh và Xã 
-    provinces = df['Tỉnh'].unique()
+    # Nhóm theo Tỉnh
+    provinces = df_data['Tỉnh'].unique()
 
     for prov in provinces:
         if pd.isna(prov): continue
-        doc.add_heading(f"I. Tỉnh {prov}", level=1)
+        new_doc.add_heading(f"I. Tỉnh {prov}", level=1)
         
-        prov_df = df[df['Tỉnh'] == prov]
+        prov_df = df_data[df_data['Tỉnh'] == prov]
         communes = prov_df['Xã'].unique()
 
         for comm in communes:
             if pd.isna(comm): continue
-            doc.add_heading(f"1. Xã {comm}", level=2)
+            new_doc.add_heading(f"1. Xã {comm}", level=2)
             
-            # Tạo bảng và đổ dữ liệu
-            table = doc.add_table(rows=1, cols=len(headers))
-            table.style = 'Table Grid'
+            # Copy bảng từ template vào file mới
+            new_table = new_doc.add_table(rows=1, cols=len(template_table.columns))
+            new_table.style = template_table.style
             
-            hdr_cells = table.rows[0].cells
-            for i, h in enumerate(headers):
-                hdr_cells[i].text = h
+            # Sao chép tiêu đề từ bảng mẫu
+            for i, cell in enumerate(template_table.rows[0].cells):
+                new_table.rows[0].cells[i].text = cell.text
 
+            # Lấy dữ liệu của xã hiện tại
             comm_df = prov_df[prov_df['Xã'] == comm]
+            
             for _, row in comm_df.iterrows():
-                row_cells = table.add_row().cells
+                row_cells = new_table.add_row().cells
                 
-                # Điền dữ liệu dựa trên các cột từ file Excel 
-                row_cells[0].text = str(row['TT'])
+                # Điền các cột (Dựa theo vị trí cột trong file Excel của bạn)
+                row_cells[0].text = str(row['TT']) if pd.notna(row['TT']) else ""
                 row_cells[1].text = str(row['Họ Và tên'])
                 
-                # Ghép Ngày/Tháng/Năm sinh [cite: 2, 3]
-                day = str(int(row['Ngày'])) if pd.notna(row['Ngày']) else ""
-                month = str(int(row['Tháng'])) if pd.notna(row['Tháng']) else ""
-                year = str(int(row['năm'])) if pd.notna(row['năm']) else ""
-                row_cells[2].text = f"{day}/{month}/{year}"
+                # Ghép Ngày/Tháng/Năm
+                d = str(int(row['Ngày'])) if pd.notna(row['Ngày']) else ""
+                m = str(int(row['Tháng'])) if pd.notna(row['Tháng']) else ""
+                y = str(int(row['năm'])) if pd.notna(row['năm']) else ""
+                row_cells[2].text = f"{d}/{m}/{y}"
                 
-                row_cells[3].text = str(row['CB'])
-                row_cells[4].text = str(row['CV'])
-                row_cells[5].text = str(row['ĐV'])
-                row_cells[6].text = str(row['N.N'])
-                row_cells[8].text = str(row['Văn Hóa'])
-                row_cells[10].text = str(row['Dân tộc'])
-                row_cells[14].text = f"{row['Xã']}, {row['Tỉnh']}"
+                row_cells[3].text = str(row['CB']) if pd.notna(row['CB']) else ""
+                row_cells[4].text = str(row['CV']) if pd.notna(row['CV']) else ""
+                row_cells[5].text = str(row['ĐV']) if pd.notna(row['ĐV']) else ""
+                row_cells[6].text = str(row['N.N']) if pd.notna(row['N.N']) else ""
+                row_cells[8].text = str(row['Văn Hóa']) if pd.notna(row['Văn Hóa']) else ""
+                row_cells[10].text = str(row['Dân tộc']) if pd.notna(row['Dân tộc']) else ""
                 
-                # Thông tin Bố, Mẹ 
+                # Quê quán (Xã - Tỉnh)
+                row_cells[14].text = f"{row['Xã']} - {row['Tỉnh']}"
+                
+                # Họ tên bố mẹ
                 bo = str(row['Bố']) if pd.notna(row['Bố']) else ""
                 me = str(row['Mẹ']) if pd.notna(row['Mẹ']) else ""
                 row_cells[16].text = f"{bo}, {me}"
@@ -79,30 +76,42 @@ def create_word_from_excel(df):
                 row_cells[19].text = str(row['Số CCCD']) if pd.notna(row['Số CCCD']) else ""
                 row_cells[20].text = str(row['Ghi chú']) if pd.notna(row['Ghi chú']) else ""
 
-    bio = BytesIO()
-    doc.save(bio)
-    bio.seek(0)
-    return bio
+    # Lưu file vào bộ nhớ
+    target_stream = BytesIO()
+    new_doc.save(target_stream)
+    target_stream.seek(0)
+    return target_stream
 
-# Giao diện Streamlit
-st.title("Xuất Trích Ngang từ File Excel (.xlsx)")
+# GIAO DIỆN STREAMLIT
+st.set_page_config(page_title="Tool Trích Ngang", layout="wide")
+st.title("Tạo File Word Trích Ngang Theo Mẫu")
 
-# Chấp nhận file .xlsx
-uploaded_file = st.file_uploader("Tải file Excel quân nhân", type=["xlsx"])
+col1, col2 = st.columns(2)
 
-if uploaded_file:
-    # Đọc file Excel (mặc định trang đầu tiên)
-    df = pd.read_excel(uploaded_file)
+with col1:
+    excel_file = st.file_uploader("1. Tải lên file Excel dữ liệu (.xlsx)", type=["xlsx"])
+
+with col2:
+    word_template = st.file_uploader("2. Tải lên file Word mẫu (.docx)", type=["docx"])
+
+if excel_file and word_template:
+    # Đọc dữ liệu Excel, bắt đầu từ dòng chứa tiêu đề thật (thường là dòng 0 hoặc 1)
+    df = pd.read_excel(excel_file, header=0)
     
-    st.success("Đã nhận file Excel!")
-    st.dataframe(df.head())
+    # Hiển thị bản xem trước
+    st.write("Dữ liệu tìm thấy:")
+    st.dataframe(df.head(5))
 
-    if st.button("Tạo file Word"):
-        with st.spinner("Đang xử lý..."):
-            word_output = create_word_from_excel(df)
-            st.download_button(
-                label="📥 Tải xuống file Word mẫu",
-                data=word_output,
-                file_name="Trich_ngang_tu_Excel.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            )
+    if st.button("Bắt đầu xử lý và Tải về"):
+        with st.spinner("Đang tạo file..."):
+            try:
+                final_docx = create_word_from_template(df, word_template)
+                st.download_button(
+                    label="📥 Tải xuống file Word kết quả",
+                    data=final_docx,
+                    file_name="Ket_qua_trich_ngang.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                )
+                st.success("Thành công!")
+            except Exception as e:
+                st.error(f"Có lỗi xảy ra: {e}")
